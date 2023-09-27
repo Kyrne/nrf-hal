@@ -53,8 +53,6 @@ use crate::pac::{timer0::RegisterBlock as TimerRegBlock0, TIMER0, TIMER1, TIMER2
 #[cfg(any(feature = "52832", feature = "52833", feature = "52840"))]
 use crate::pac::{TIMER3, TIMER4};
 
-use core::ops::{Add, Sub};
-
 /// Hides intermediate traits from end users.
 mod sealed {
 
@@ -191,7 +189,7 @@ macro_rules! impl_instance {
     };
 }
 
-macro_rules! freq_gate {
+macro_rules! freq_gate_timer {
     (type_for TimerRegBlock0 : {
         $(
             $freq:literal,$presc:literal,$overflow:literal,$sck:literal
@@ -223,65 +221,6 @@ macro_rules! freq_gate {
         );
 
     };
-    (type_for RtcRegBlock: {
-        $(
-            $freq:literal,$presc:literal,$overflow:literal,$sck:literal
-        )+
-    }) => {
-        paste!(
-            /// A [`Monotonic`] timer implementation
-            ///
-            /// This implementation allows scheduling [rtic](https://docs.rs/rtic/latest/rtic/)
-            /// applications using the
-            /// [`rtc`](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1.1.pdf#page=363) (§6.22) peripheral.
-            /// It is only possible to instantiate this abstraction for the following
-            /// frequencies since they are the only ones that generate valid prescaler values.
-            /// ## Rtc
-            ///
-            ///<center>
-            ///
-            ///| frequency  | source clock frequency | time until overflow |
-            ///|------------|------------------|---------------------|
-            $(
-                #[doc = "| <center> " $freq "Hz </center> | <center> " $sck " </center> | <center> " $overflow " </center> |"]
-            )+
-            ///
-            ///</center>
-            ///
-            ///
-            pub struct MonotonicRtc<T: Instance<RegBlock = RtcRegBlock>, const FREQ: u32,O:core::default::Default> {
-                instance:PhantomData<T>,
-                overflow:O
-            }
-        );
-
-    };
-    (
-        new_for RtcRegBlock : {
-            $(
-                $freq:literal,$presc:literal
-            )+
-        }
-    ) => {
-        paste!(
-        $(
-            impl<T,O:core::default::Default> MonotonicRtc <T,$freq,O>
-            where T:Instance<RegBlock = RtcRegBlock>{
-                /// Instantiates a new [`Monotonic`](rtic_monotonic)
-                /// rtc for the specified [`RtcInstance`].
-                ///
-                /// This function permits construction of the
-                #[doc = "MonotonicRtc for `" $freq "` Hz."]
-                pub fn new(_: T) -> Self {
-                    unsafe { T::reg().prescaler.write(|w| w.bits($presc as u32)) };
-                    Self {
-                        instance: PhantomData,
-                        overflow: O::default(),
-                    }
-                }
-            }
-        )+);
-    };
     (
         new_for TimerRegBlock0 : {
             $(
@@ -311,31 +250,77 @@ macro_rules! freq_gate {
             }
         )+);
     };
-    ($(
+    (
         $type:literal, $reg:ident: {
                 $(
-                    $freq:literal,$presc:literal,$overflow:literal,$sck:literal
+                    $freq:literal,$presc:literal,$overflow:literal,$sck:literal;
+                )+
+        }
+    ) => (
+        freq_gate_timer!(
+            type_for $reg : {
+            $(
+                $freq,$presc,$overflow,$sck
                 )+
             }
-        )+
-    ) => (
-            $(
-                freq_gate!(
-                    type_for $reg : {
-                        $(
-                            $freq,$presc,$overflow,$sck
-                        )+
-                    }
-                );
-                freq_gate!(
-                    new_for $reg:{
-                        $(
-                            $freq,$presc
-                        )+
-                    }
-                );
-            )+
+        );
+        freq_gate_timer!(
+            new_for $reg:{
+                $(
+                $freq,$presc
+                )+
+            }
+        );
     )
+}
+
+macro_rules! impl_rtc {
+    (fields) => {
+        /// A [`Monotonic`] timer implementation
+        ///
+        /// This implementation allows scheduling [rtic](https://docs.rs/rtic/latest/rtic/)
+        /// applications using the
+        /// [`rtc`](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1.1.pdf#page=363) (§6.22) peripheral.
+        /// It is only possible to instantiate this abstraction for the following
+        /// frequencies since they are the only ones that generate valid prescaler values.
+        pub struct MonotonicRtc<
+            T: Instance<RegBlock = RtcRegBlock>,
+            const FREQ: u32,
+            O: core::default::Default,
+        > {
+            instance: PhantomData<T>,
+            overflow: O,
+        }
+    };
+    (new) => {
+        paste!(
+            impl<T, O: core::default::Default, const FREQ: u32> MonotonicRtc<T, FREQ, O>
+            where
+                T: Instance<RegBlock = RtcRegBlock>,
+            {
+                const fn presc() -> Option<u32> {
+                    let intermediate = { 32_768 / FREQ };
+                    match 32_768 / intermediate == FREQ {
+                        true => Some({ 32_768 / (FREQ + 1) }),
+                        _ => None,
+                    }
+                }
+                /// Instantiates a new [`Monotonic`](rtic_monotonic)
+                /// rtc for the specified [`RtcInstance`].
+                pub fn new(_: T) -> Self {
+                    unsafe { T::reg().prescaler.write(|w| w.bits(Self::presc().unwrap())) };
+                    Self {
+                        instance: PhantomData,
+                        overflow: O::default(),
+                    }
+                }
+            }
+        );
+    };
+    () => {
+        impl_rtc!(fields);
+        impl_rtc!(new);
+    };
 }
 
 impl_instance!(
@@ -353,21 +338,18 @@ impl_instance!(
     }
 );
 
-freq_gate! {
+freq_gate_timer! {
     "Timer",TimerRegBlock0:{
-        16_000_000,0,"4 min 28 seconds","16MHz"
-        8_000_000,1,"8 min 56 seconds","16MHz"
-        4_000_000,2,"17 min 53 seconds","16MHz"
-        2_000_000,3,"35 min 47 seconds","16MHz"
-        1_000_000,4,"1 hour 11 min 34 seconds","1MHz"
-        500_000,5,"2 hours 23 min 9 seconds","1MHz"
-        250_000,6,"4 hours 46 min 19 seconds","1MHz"
-        125_000,7,"9 hours 32 min 39 seconds","1MHz"
-        62_500,8,"19 hours 5 min 19 seconds","1MHz"
+        16_000_000,0,"4 min 28 seconds","16MHz";
+        8_000_000,1,"8 min 56 seconds","16MHz";
+        4_000_000,2,"17 min 53 seconds","16MHz";
+        2_000_000,3,"35 min 47 seconds","16MHz";
+        1_000_000,4,"1 hour 11 min 34 seconds","1MHz";
+        500_000,5,"2 hours 23 min 9 seconds","1MHz";
+        250_000,6,"4 hours 46 min 19 seconds","1MHz";
+        125_000,7,"9 hours 32 min 39 seconds","1MHz";
+        62_500,8,"19 hours 5 min 19 seconds","1MHz";
     }
-
-    "Rtc",RtcRegBlock: {
-        123,0,"4 min 28 seconds","16MHz" // temp data from timer
-    }
-    // TODO Add frequencies
 }
+
+impl_rtc!();
