@@ -175,7 +175,7 @@ Trait constrained construction
 to ensure that freq is valid.
 -->
 ```rust
-pub struct MonotonicTimer<T: Instance<RegBlock = TimerRegBlock0>, const FREQ: u32> {
+pub struct MonotonicTimer<T: Instance, const FREQ: u32> {
     instance:PhantomData<T>,
 }
 ```
@@ -204,7 +204,6 @@ pub trait Instance {
     /// Allows modification of the registers at a type level rather than
     /// by storing the [`Instance`] at run-time.
     fn reg<'a>() -> &'a Self::RegBlock;
-        const DISABLE_INTERRUPT_ON_EMPTY_QUEUE: bool = true;
 }
 pub trait RtcInstance: Instance<RegBlock = super::RtcRegBlock> {}
 pub trait TimerInstance: Instance<RegBlock = super::TimerRegBlock0> {}
@@ -247,10 +246,10 @@ Implementation now works great!
 -->
 
 ```rust
-pub struct MonotonicTimer<T: Instance<RegBlock = TimerRegBlock0>, const FREQ: u32> {
+pub struct MonotonicTimer<T: TimerInstance, const FREQ: u32> {
     ...
 }
-pub struct MonotonicRtc<T: Instance<RegBlock = RtcRegBlock>, const FREQ: u32> {
+pub struct MonotonicRtc<T: RtcInstance, const FREQ: u32> {
     ...
 }
 ```
